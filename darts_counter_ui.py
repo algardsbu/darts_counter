@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -10,6 +10,9 @@ import customtkinter as ctk
 
 from darts_counter import checkout_suggestions, possible_checkout_dart_counts
 from match_history import delete_match, get_match, init_db, list_matches, save_match
+
+
+CRICKET_TARGETS = ["20", "19", "18", "17", "16", "15", "B"]
 
 
 @dataclass
@@ -24,6 +27,15 @@ class PlayerState:
     total_scored: int = 0
     highest_score: int = 0
     highest_checkout: int = 0
+    scores_100_plus: int = 0
+    scores_140_plus: int = 0
+    scores_180: int = 0
+    checkout_attempts: int = 0
+    checkout_successes: int = 0
+    leg_visits: int = 0
+    first9_scored: int = 0
+    cricket_points: int = 0
+    cricket_marks: dict[str, int] = field(default_factory=lambda: {target: 0 for target in CRICKET_TARGETS})
 
 
 class DartsUI(ctk.CTk):
@@ -39,6 +51,7 @@ class DartsUI(ctk.CTk):
         self.start_score = 501
         self.legs_to_win_set = 1
         self.sets_to_win_match = 1
+        self.game_variant = "X01"
 
         self.players: list[PlayerState] = []
         self.set_number = 1
@@ -50,6 +63,7 @@ class DartsUI(ctk.CTk):
         self.pending_valid_counts: list[int] = []
 
         self.mode_var = tk.StringVar(value="501")
+        self.game_variant_var = tk.StringVar(value="X01")
         self.custom_score_var = tk.StringVar(value="501")
         self.preset_var = tk.StringVar(value="Single leg")
         self.custom_legs_var = tk.StringVar(value="3")
@@ -65,6 +79,7 @@ class DartsUI(ctk.CTk):
         self.checkout_count_var = tk.StringVar(value="")
         self.stats_title_var = tk.StringVar(value="Match statistics")
         self.stats_subtitle_var = tk.StringVar(value="")
+        self.db_selected_count_var = tk.StringVar(value="Selected: 0")
         self.input_mode_var = tk.StringVar(value="Total")
         self.dart_score_vars = [tk.StringVar(value=""), tk.StringVar(value=""), tk.StringVar(value="")]
         self.dart_base_inputs = ["", "", ""]
@@ -72,6 +87,17 @@ class DartsUI(ctk.CTk):
         self.dart_multiplier_var = tk.StringVar(value="x1")
         self.history_selection_var = tk.StringVar(value="No saved matches")
         self.history_search_var = tk.StringVar(value="")
+        self.theme_var = tk.StringVar(value="Arena")
+
+        self.dashboard_current_var = tk.StringVar(value="Current: -")
+        self.dashboard_primary_var = tk.StringVar(value="Remaining: -")
+        self.dashboard_darts_var = tk.StringVar(value="Darts in hand: 3")
+        self.dashboard_chance_var = tk.StringVar(value="Checkout chance: -")
+        self.score_input_label_var = tk.StringVar(value="3-dart score")
+        self.checkout_route_primary_var = tk.StringVar(value="")
+        self.checkout_route_backup_var = tk.StringVar(value="")
+        self.timeline_var = tk.StringVar(value="Timeline: -")
+        self.throw_strip_vars = [tk.StringVar(value="-") for _ in range(3)]
 
         self.extra_player_vars: list[tk.StringVar] = []
         self.extra_player_entries: list[ctk.CTkEntry] = []
@@ -83,6 +109,41 @@ class DartsUI(ctk.CTk):
         self.selected_dart_index = 0
         self.turn_animation_after_id: str | None = None
         self.history_option_to_id: dict[str, int] = {}
+        self.db_match_check_vars: dict[int, tk.BooleanVar] = {}
+        self.db_selected_ids: set[int] = set()
+        self.db_select_all_var = tk.BooleanVar(value=False)
+        self.db_rows: list[ctk.CTkFrame] = []
+        self.set_leg_winners: dict[int, list[str]] = {1: []}
+
+        self.theme_map = {
+            "Arena": {
+                "row_normal_light": "#e5e7eb",
+                "row_normal_dark": "#1f2937",
+                "row_active_light": "#dbeafe",
+                "row_active_dark": "#1e3a8a",
+                "checkout_light": "#fde68a",
+                "checkout_dark": "#78350f",
+                "checkout_border": "#f59e0b",
+            },
+            "Pub Classic": {
+                "row_normal_light": "#ede0d4",
+                "row_normal_dark": "#3f2f25",
+                "row_active_light": "#ffedd5",
+                "row_active_dark": "#7c2d12",
+                "checkout_light": "#fde68a",
+                "checkout_dark": "#854d0e",
+                "checkout_border": "#d97706",
+            },
+            "Neon Practice": {
+                "row_normal_light": "#e5e7eb",
+                "row_normal_dark": "#0f172a",
+                "row_active_light": "#cffafe",
+                "row_active_dark": "#164e63",
+                "checkout_light": "#d9f99d",
+                "checkout_dark": "#14532d",
+                "checkout_border": "#22c55e",
+            },
+        }
 
         self.row_normal_light = "#e5e7eb"
         self.row_normal_dark = "#1f2937"
@@ -92,13 +153,17 @@ class DartsUI(ctk.CTk):
         self.setup_frame = ctk.CTkFrame(self)
         self.game_frame = ctk.CTkFrame(self)
         self.stats_frame = ctk.CTkFrame(self)
+        self.db_manager_frame = ctk.CTkFrame(self)
 
         self._build_setup_ui()
         self._build_game_ui()
         self._build_stats_ui()
+        self._build_db_manager_ui()
 
         init_db()
         self.refresh_history_options()
+        self._on_game_variant_changed()
+        self._apply_visual_theme()
 
         self.setup_frame.pack(fill="both", expand=True, padx=16, pady=16)
 
@@ -147,7 +212,17 @@ class DartsUI(ctk.CTk):
         )
         self.more_players_frame.grid_remove()
 
-        ctk.CTkLabel(self.setup_frame, text="Start score").grid(row=5, column=0, sticky="w", padx=16)
+        ctk.CTkLabel(self.setup_frame, text="Game mode").grid(row=5, column=0, sticky="w", padx=16)
+        self.game_variant_menu = ctk.CTkOptionMenu(
+            self.setup_frame,
+            variable=self.game_variant_var,
+            values=["X01", "Cricket"],
+            command=self._on_game_variant_changed,
+            width=180,
+        )
+        self.game_variant_menu.grid(row=6, column=0, sticky="w", padx=16, pady=(4, 12))
+
+        ctk.CTkLabel(self.setup_frame, text="Start score").grid(row=5, column=1, sticky="w", padx=16)
         self.mode_menu = ctk.CTkOptionMenu(
             self.setup_frame,
             variable=self.mode_var,
@@ -155,10 +230,10 @@ class DartsUI(ctk.CTk):
             command=self._on_mode_changed,
             width=180,
         )
-        self.mode_menu.grid(row=6, column=0, sticky="w", padx=16, pady=(4, 12))
+        self.mode_menu.grid(row=6, column=1, sticky="w", padx=16, pady=(4, 12))
 
         self.custom_score_entry = ctk.CTkEntry(self.setup_frame, textvariable=self.custom_score_var, width=120)
-        self.custom_score_entry.grid(row=6, column=1, sticky="w", padx=16, pady=(4, 12))
+        self.custom_score_entry.grid(row=6, column=2, sticky="w", padx=16, pady=(4, 12))
         self.custom_score_entry.grid_remove()
 
         ctk.CTkLabel(self.setup_frame, text="Match format").grid(row=7, column=0, sticky="w", padx=16)
@@ -177,6 +252,16 @@ class DartsUI(ctk.CTk):
         )
         self.preset_menu.grid(row=8, column=0, sticky="w", padx=16, pady=(4, 12))
 
+        ctk.CTkLabel(self.setup_frame, text="Theme").grid(row=7, column=1, sticky="w", padx=16)
+        self.theme_menu = ctk.CTkOptionMenu(
+            self.setup_frame,
+            variable=self.theme_var,
+            values=["Arena", "Pub Classic", "Neon Practice"],
+            command=self._on_theme_changed,
+            width=180,
+        )
+        self.theme_menu.grid(row=8, column=1, sticky="w", padx=16, pady=(4, 12))
+
         self.custom_match_frame = ctk.CTkFrame(self.setup_frame)
         self.custom_match_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 12))
         self.custom_match_frame.grid_columnconfigure(0, weight=1)
@@ -192,43 +277,15 @@ class DartsUI(ctk.CTk):
         ctk.CTkButton(self.setup_frame, text="Start Match", command=self.start_match, width=140).grid(
             row=10, column=0, sticky="w", padx=16, pady=(8, 16)
         )
-
-        history_frame = ctk.CTkFrame(self.setup_frame)
-        history_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 16))
-        history_frame.grid_columnconfigure(0, weight=1)
-        history_frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(history_frame, text="Match history").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
-        search_row = ctk.CTkFrame(history_frame, fg_color="transparent")
-        search_row.grid(row=0, column=1, sticky="e", padx=10, pady=(10, 4))
-        ctk.CTkLabel(search_row, text="Search player").grid(row=0, column=0, padx=(0, 6))
-        self.history_search_entry = ctk.CTkEntry(search_row, textvariable=self.history_search_var, width=180)
-        self.history_search_entry.grid(row=0, column=1, padx=(0, 6))
-        self.history_search_entry.bind("<Return>", lambda _event: self.refresh_history_options())
-        ctk.CTkButton(search_row, text="Apply", command=self.refresh_history_options, width=80).grid(row=0, column=2, padx=(0, 6))
-        ctk.CTkButton(search_row, text="Clear", command=self._clear_history_search, width=80).grid(row=0, column=3)
-
-        self.history_menu = ctk.CTkOptionMenu(
-            history_frame,
-            variable=self.history_selection_var,
-            values=["No saved matches"],
-            width=420,
+        ctk.CTkButton(self.setup_frame, text="Database manager", command=self._open_db_manager, width=170).grid(
+            row=10, column=1, sticky="w", padx=16, pady=(8, 16)
         )
-        self.history_menu.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
-
-        actions = ctk.CTkFrame(history_frame, fg_color="transparent")
-        actions.grid(row=1, column=1, sticky="e", padx=10, pady=(0, 10))
-        ctk.CTkButton(actions, text="Refresh", command=self.refresh_history_options, width=100).grid(row=0, column=0, padx=(0, 8))
-        ctk.CTkButton(actions, text="View selected", command=self._show_selected_history, width=120).grid(row=0, column=1, padx=(0, 8))
-        ctk.CTkButton(actions, text="Export JSON", command=self._export_selected_history_json, width=110).grid(row=0, column=2, padx=(0, 8))
-        ctk.CTkButton(actions, text="Export CSV", command=self._export_selected_history_csv, width=100).grid(row=0, column=3, padx=(0, 8))
-        ctk.CTkButton(actions, text="Delete", command=self._delete_selected_history, width=90).grid(row=0, column=4)
 
     def _build_game_ui(self) -> None:
         self.game_frame.grid_columnconfigure(0, weight=2)
         self.game_frame.grid_columnconfigure(1, weight=2)
         self.game_frame.grid_columnconfigure(2, weight=1)
-        self.game_frame.grid_rowconfigure(7, weight=1)
+        self.game_frame.grid_rowconfigure(10, weight=1)
 
         ctk.CTkLabel(self.game_frame, text="Live Match", font=ctk.CTkFont(size=24, weight="bold")).grid(
             row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(16, 8)
@@ -236,8 +293,26 @@ class DartsUI(ctk.CTk):
         ctk.CTkLabel(self.game_frame, textvariable=self.round_label_var).grid(row=1, column=0, sticky="w", padx=16)
         ctk.CTkLabel(self.game_frame, textvariable=self.current_label_var).grid(row=1, column=1, sticky="w", padx=16)
 
+        self.dashboard_frame = ctk.CTkFrame(self.game_frame)
+        self.dashboard_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(8, 10))
+        for col in range(4):
+            self.dashboard_frame.grid_columnconfigure(col, weight=1)
+
+        self.dashboard_cards: list[ctk.CTkFrame] = []
+        dashboard_specs = [
+            (self.dashboard_current_var, "Current"),
+            (self.dashboard_primary_var, "Remaining"),
+            (self.dashboard_darts_var, "Darts"),
+            (self.dashboard_chance_var, "Checkout chance"),
+        ]
+        for col, (variable, _) in enumerate(dashboard_specs):
+            card = ctk.CTkFrame(self.dashboard_frame)
+            card.grid(row=0, column=col, sticky="ew", padx=4, pady=4)
+            ctk.CTkLabel(card, textvariable=variable, font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=10, pady=10)
+            self.dashboard_cards.append(card)
+
         self.checkout_banner = ctk.CTkFrame(self.game_frame, fg_color=("#fde68a", "#78350f"), border_width=1, border_color="#f59e0b")
-        self.checkout_banner.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(8, 12))
+        self.checkout_banner.grid(row=3, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 12))
         self.checkout_banner.grid_columnconfigure(0, weight=1)
         self.checkout_title_label = ctk.CTkLabel(
             self.checkout_banner,
@@ -248,17 +323,39 @@ class DartsUI(ctk.CTk):
         self.checkout_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
         self.checkout_value_label = ctk.CTkLabel(
             self.checkout_banner,
-            textvariable=self.checkout_label_var,
+            textvariable=self.checkout_route_primary_var,
             font=ctk.CTkFont(size=20, weight="bold"),
             text_color=("#431407", "#fef9c3"),
             anchor="w",
             justify="left",
         )
         self.checkout_value_label.grid(row=1, column=0, sticky="w", padx=12, pady=(2, 10))
+        self.checkout_backup_label = ctk.CTkLabel(
+            self.checkout_banner,
+            textvariable=self.checkout_route_backup_var,
+            font=ctk.CTkFont(size=14),
+            text_color=("#713f12", "#fde68a"),
+            anchor="w",
+            justify="left",
+        )
+        self.checkout_backup_label.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
         self.checkout_banner.grid_remove()
 
+        self.timeline_label = ctk.CTkLabel(self.game_frame, textvariable=self.timeline_var)
+        self.timeline_label.grid(row=4, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 8))
+
+        self.throw_strip_frame = ctk.CTkFrame(self.game_frame)
+        self.throw_strip_frame.grid(row=5, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 10))
+        for col in range(3):
+            self.throw_strip_frame.grid_columnconfigure(col, weight=1)
+        self.throw_strip_labels: list[ctk.CTkLabel] = []
+        for idx, var in enumerate(self.throw_strip_vars):
+            lbl = ctk.CTkLabel(self.throw_strip_frame, textvariable=var, font=ctk.CTkFont(size=14, weight="bold"))
+            lbl.grid(row=0, column=idx, sticky="ew", padx=4, pady=6)
+            self.throw_strip_labels.append(lbl)
+
         self.scoreboard_frame = ctk.CTkFrame(self.game_frame)
-        self.scoreboard_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=16)
+        self.scoreboard_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=16)
         self.scoreboard_frame.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(self.scoreboard_frame, fg_color=("gray82", "gray25"))
@@ -267,16 +364,20 @@ class DartsUI(ctk.CTk):
         header.grid_columnconfigure(1, weight=2)
         header.grid_columnconfigure(2, weight=2)
         header.grid_columnconfigure(3, weight=2)
-        ctk.CTkLabel(header, text="Player", anchor="w", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", padx=12, pady=8)
-        ctk.CTkLabel(header, text="Remaining", anchor="center", font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, sticky="ew", padx=6)
-        ctk.CTkLabel(header, text="Legs", anchor="center", font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, sticky="ew", padx=6)
-        ctk.CTkLabel(header, text="Sets", anchor="center", font=ctk.CTkFont(weight="bold")).grid(row=0, column=3, sticky="ew", padx=6)
+        self.score_header_player = ctk.CTkLabel(header, text="Player", anchor="w", font=ctk.CTkFont(weight="bold"))
+        self.score_header_player.grid(row=0, column=0, sticky="w", padx=12, pady=8)
+        self.score_header_primary = ctk.CTkLabel(header, text="Remaining", anchor="center", font=ctk.CTkFont(weight="bold"))
+        self.score_header_primary.grid(row=0, column=1, sticky="ew", padx=6)
+        self.score_header_legs = ctk.CTkLabel(header, text="Legs", anchor="center", font=ctk.CTkFont(weight="bold"))
+        self.score_header_legs.grid(row=0, column=2, sticky="ew", padx=6)
+        self.score_header_sets = ctk.CTkLabel(header, text="Sets", anchor="center", font=ctk.CTkFont(weight="bold"))
+        self.score_header_sets.grid(row=0, column=3, sticky="ew", padx=6)
 
         self.score_rows_container = ctk.CTkFrame(self.scoreboard_frame, fg_color="transparent")
         self.score_rows_container.grid(row=1, column=0, sticky="ew")
         self.score_rows_container.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(self.game_frame, text="3-dart score").grid(row=4, column=0, sticky="w", padx=16, pady=(12, 4))
+        ctk.CTkLabel(self.game_frame, textvariable=self.score_input_label_var).grid(row=7, column=0, sticky="w", padx=16, pady=(12, 4))
 
         self.input_mode_switch = ctk.CTkSegmentedButton(
             self.game_frame,
@@ -285,19 +386,20 @@ class DartsUI(ctk.CTk):
             command=self._on_input_mode_changed,
             width=220,
         )
-        self.input_mode_switch.grid(row=4, column=1, sticky="w", padx=16, pady=(12, 4))
+        self.input_mode_switch.grid(row=7, column=1, sticky="w", padx=16, pady=(12, 4))
 
         self.total_input_frame = ctk.CTkFrame(self.game_frame, fg_color="transparent")
-        self.total_input_frame.grid(row=5, column=0, columnspan=2, sticky="w", padx=16)
+        self.total_input_frame.grid(row=8, column=0, columnspan=2, sticky="w", padx=16)
         self.score_entry = ctk.CTkEntry(self.total_input_frame, width=120)
         self.score_entry.grid(row=0, column=0, sticky="w")
         self.score_entry.bind("<Return>", lambda _event: self.submit_turn())
+        self.score_entry.bind("<KeyRelease>", lambda _event: self._update_throw_strip_from_values([f"Total: {self.score_entry.get().strip() or '-'}", "-", "-"]))
 
         self.submit_button = ctk.CTkButton(self.total_input_frame, text="Submit Turn", command=self.submit_turn, width=140)
         self.submit_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
         self.per_dart_frame = ctk.CTkFrame(self.game_frame)
-        self.per_dart_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
+        self.per_dart_frame.grid(row=8, column=0, columnspan=2, sticky="ew", padx=16)
         self.per_dart_frame.grid_columnconfigure(0, weight=1)
         self.per_dart_frame.grid_columnconfigure(1, weight=1)
         self.per_dart_frame.grid_columnconfigure(2, weight=1)
@@ -376,12 +478,12 @@ class DartsUI(ctk.CTk):
         self.per_dart_frame.grid_remove()
 
         side_actions = ctk.CTkFrame(self.game_frame, fg_color="transparent")
-        side_actions.grid(row=5, column=2, sticky="e", padx=16)
+        side_actions.grid(row=8, column=2, sticky="e", padx=16)
         ctk.CTkButton(side_actions, text="End Match", command=self._end_match_midway, width=140).grid(row=0, column=0, pady=(0, 6))
         ctk.CTkButton(side_actions, text="New Match", command=self.reset_to_setup, width=140).grid(row=1, column=0)
 
         self.checkout_frame = ctk.CTkFrame(self.game_frame)
-        self.checkout_frame.grid(row=6, column=0, columnspan=3, sticky="ew", padx=16, pady=(10, 0))
+        self.checkout_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=16, pady=(10, 0))
         self.checkout_frame.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(self.checkout_frame, textvariable=self.checkout_prompt_var).grid(row=0, column=0, sticky="w", padx=10, pady=10)
@@ -396,7 +498,7 @@ class DartsUI(ctk.CTk):
         self.checkout_frame.grid_remove()
 
         self.log_text = ctk.CTkTextbox(self.game_frame)
-        self.log_text.grid(row=7, column=0, columnspan=3, sticky="nsew", padx=16, pady=(12, 16))
+        self.log_text.grid(row=10, column=0, columnspan=3, sticky="nsew", padx=16, pady=(12, 16))
         self.log_text.configure(state="disabled")
 
     def _build_stats_ui(self) -> None:
@@ -424,6 +526,77 @@ class DartsUI(ctk.CTk):
         buttons.grid(row=3, column=0, sticky="e", padx=18, pady=(0, 16))
         ctk.CTkButton(buttons, text="Back to setup", command=self.reset_to_setup, width=140).grid(row=0, column=0)
 
+    def _build_db_manager_ui(self) -> None:
+        self.db_manager_frame.grid_columnconfigure(0, weight=1)
+        self.db_manager_frame.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            self.db_manager_frame,
+            text="Database Manager",
+            font=ctk.CTkFont(size=28, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
+
+        ctk.CTkLabel(
+            self.db_manager_frame,
+            textvariable=self.db_selected_count_var,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, sticky="e", padx=18, pady=(16, 8))
+
+        controls = ctk.CTkFrame(self.db_manager_frame)
+        controls.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+        controls.grid_columnconfigure(0, weight=1)
+        controls.grid_columnconfigure(1, weight=1)
+
+        left = ctk.CTkFrame(controls, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w", padx=10, pady=10)
+        ctk.CTkLabel(left, text="Search player").grid(row=0, column=0, padx=(0, 6))
+        self.history_search_entry = ctk.CTkEntry(left, textvariable=self.history_search_var, width=220)
+        self.history_search_entry.grid(row=0, column=1, padx=(0, 6))
+        self.history_search_entry.bind("<Return>", lambda _event: self.refresh_history_options())
+        ctk.CTkButton(left, text="Apply", command=self.refresh_history_options, width=80).grid(row=0, column=2, padx=(0, 6))
+        ctk.CTkButton(left, text="Clear", command=self._clear_history_search, width=80).grid(row=0, column=3)
+
+        right = ctk.CTkFrame(controls, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e", padx=10, pady=10)
+        self.db_select_all_switch = ctk.CTkSwitch(
+            right,
+            text="Select all",
+            variable=self.db_select_all_var,
+            onvalue=True,
+            offvalue=False,
+            command=self._toggle_select_all_matches,
+        )
+        self.db_select_all_switch.grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(right, text="Refresh", command=self.refresh_history_options, width=90).grid(row=0, column=1)
+
+        selection_bar = ctk.CTkFrame(self.db_manager_frame)
+        selection_bar.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 10))
+        selection_bar.grid_columnconfigure(0, weight=1)
+        selection_bar.grid_columnconfigure(1, weight=1)
+
+        self.history_menu = ctk.CTkOptionMenu(
+            selection_bar,
+            variable=self.history_selection_var,
+            values=["No saved matches"],
+            width=460,
+        )
+        self.history_menu.grid(row=0, column=0, sticky="w", padx=10, pady=10)
+
+        actions = ctk.CTkFrame(selection_bar, fg_color="transparent")
+        actions.grid(row=0, column=1, sticky="e", padx=10, pady=10)
+        ctk.CTkButton(actions, text="View selected", command=self._show_selected_history, width=120).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(actions, text="Export JSON", command=self._export_selected_history_json, width=110).grid(row=0, column=1, padx=(0, 8))
+        ctk.CTkButton(actions, text="Export CSV", command=self._export_selected_history_csv, width=100).grid(row=0, column=2, padx=(0, 8))
+        ctk.CTkButton(actions, text="Delete selected", command=self._delete_checked_history, width=130).grid(row=0, column=3)
+
+        self.db_matches_scroll = ctk.CTkScrollableFrame(self.db_manager_frame)
+        self.db_matches_scroll.grid(row=3, column=0, sticky="nsew", padx=18, pady=(0, 12))
+        self.db_matches_scroll.grid_columnconfigure(0, weight=1)
+
+        footer = ctk.CTkFrame(self.db_manager_frame, fg_color="transparent")
+        footer.grid(row=4, column=0, sticky="e", padx=18, pady=(0, 16))
+        ctk.CTkButton(footer, text="Back to setup", command=self._back_from_db_manager, width=140).grid(row=0, column=0)
+
     def _on_mode_changed(self, _selection: str = "") -> None:
         if self.mode_var.get() == "Custom":
             self.custom_score_entry.grid()
@@ -431,11 +604,54 @@ class DartsUI(ctk.CTk):
         else:
             self.custom_score_entry.grid_remove()
 
+    def _on_game_variant_changed(self, _selection: str = "") -> None:
+        is_x01 = self.game_variant_var.get() == "X01"
+        if is_x01:
+            self.mode_menu.configure(state="normal")
+            if self.mode_var.get() == "Custom":
+                self.custom_score_entry.grid()
+            self.preset_menu.configure(state="normal")
+            self.input_mode_switch.configure(state="normal")
+            self.score_input_label_var.set("3-dart score")
+            self.score_entry.configure(placeholder_text="")
+        else:
+            self.mode_menu.configure(state="disabled")
+            self.custom_score_entry.grid_remove()
+            self.preset_menu.configure(state="disabled")
+            self.custom_match_frame.grid_remove()
+            self.input_mode_var.set("Total")
+            self._on_input_mode_changed()
+            self.input_mode_switch.configure(state="disabled")
+            self.score_input_label_var.set("Cricket hits (e.g. T20,S19,DB)")
+            self.score_entry.configure(placeholder_text="T20,S20,DB")
+
+    def _on_theme_changed(self, _selection: str = "") -> None:
+        self._apply_visual_theme()
+
     def _on_preset_changed(self, _selection: str = "") -> None:
         if self.preset_var.get() == "Custom":
             self.custom_match_frame.grid()
         else:
             self.custom_match_frame.grid_remove()
+
+    def _apply_visual_theme(self) -> None:
+        theme = self.theme_map.get(self.theme_var.get(), self.theme_map["Arena"])
+        self.row_normal_light = str(theme["row_normal_light"])
+        self.row_normal_dark = str(theme["row_normal_dark"])
+        self.row_active_light = str(theme["row_active_light"])
+        self.row_active_dark = str(theme["row_active_dark"])
+
+        for card in self.dashboard_cards:
+            card.configure(fg_color=(self.row_normal_light, self.row_normal_dark))
+
+        if self.checkout_banner.winfo_ismapped():
+            self.checkout_banner.configure(
+                fg_color=(str(theme["checkout_light"]), str(theme["checkout_dark"])),
+                border_color=str(theme["checkout_border"]),
+            )
+
+        if self.players:
+            self.refresh_game_view()
 
     def _on_input_mode_changed(self, _selection: str = "") -> None:
         if self.input_mode_var.get() == "Per dart":
@@ -443,10 +659,13 @@ class DartsUI(ctk.CTk):
             self.per_dart_frame.grid()
             self._select_dart(0)
             self.dart_entries[0].focus_set()
+            self._update_per_dart_total()
         else:
             self.per_dart_frame.grid_remove()
             self.total_input_frame.grid()
             self.score_entry.focus_set()
+            total_text = self.score_entry.get().strip()
+            self._update_throw_strip_from_values([f"Total: {total_text or '-'}", "-", "-"])
 
     def _focus_score_input(self) -> None:
         if self.input_mode_var.get() == "Per dart":
@@ -485,8 +704,10 @@ class DartsUI(ctk.CTk):
 
     def _update_per_dart_total(self) -> None:
         total = 0
+        display_values: list[str] = []
         for var in self.dart_score_vars:
             raw = var.get().strip()
+            display_values.append(raw if raw else "-")
             if raw == "":
                 continue
             try:
@@ -494,6 +715,8 @@ class DartsUI(ctk.CTk):
             except Exception:
                 pass
         self.per_dart_total_var.set(f"Per-dart total: {total}")
+        if self.input_mode_var.get() == "Per dart":
+            self._update_throw_strip_from_values(display_values)
 
     def _on_per_dart_entry_changed(self, dart_index: int) -> None:
         self.dart_base_inputs[dart_index] = ""
@@ -563,6 +786,8 @@ class DartsUI(ctk.CTk):
         self._update_per_dart_total()
 
     def _resolve_turn_score(self) -> int | None:
+        if self.game_variant != "X01":
+            return None
         if self.input_mode_var.get() == "Per dart":
             raw_values = [var.get().strip() for var in self.dart_score_vars]
             if all(value == "" for value in raw_values):
@@ -588,6 +813,54 @@ class DartsUI(ctk.CTk):
             messagebox.showerror("Invalid score", "Enter a number between 0 and 180.")
             return None
         return score
+
+    def _resolve_cricket_tokens(self) -> list[str] | None:
+        raw = self.score_entry.get().strip()
+        if not raw:
+            messagebox.showerror("Invalid input", "Enter up to 3 cricket hits, for example: T20,S19,DB")
+            return None
+
+        tokens = [token.strip() for token in raw.replace(" ", "").split(",") if token.strip()]
+        if not tokens or len(tokens) > 3:
+            messagebox.showerror("Invalid input", "Enter between 1 and 3 comma-separated hits.")
+            return None
+
+        for token in tokens:
+            if self._cricket_token_to_value(token) is None:
+                messagebox.showerror("Invalid input", f"Invalid cricket hit: {token}")
+                return None
+        return tokens
+
+    def _submit_cricket_turn(self) -> None:
+        tokens = self._resolve_cricket_tokens()
+        if tokens is None:
+            return
+
+        player = self._current_player()
+        player.turns_played += 1
+        player.darts_thrown += len(tokens)
+        player.leg_visits += 1
+
+        points_gained = 0
+        for token in tokens:
+            gained = self._apply_cricket_throw(player, token)
+            if gained is not None:
+                points_gained += gained
+
+        player.total_scored += points_gained
+        player.highest_score = max(player.highest_score, points_gained)
+
+        if player.leg_visits <= 3:
+            player.first9_scored += points_gained
+
+        self._update_throw_strip_from_values(tokens)
+        self._append_log(f"{player.name}: {','.join(tokens)} | +{points_gained} pts")
+
+        if self._cricket_player_can_win(player):
+            self._handle_leg_winner(player)
+            return
+
+        self._advance_turn()
 
     def _on_more_players_toggled(self) -> None:
         if self.more_players_var.get():
@@ -627,12 +900,16 @@ class DartsUI(ctk.CTk):
         return names
 
     def _resolve_start_score(self) -> int:
+        if self.game_variant_var.get() != "X01":
+            return 0
         mode = self.mode_var.get()
         if mode == "Custom":
             return self._parse_positive_int(self.custom_score_var.get(), "custom start score")
         return int(mode)
 
     def _resolve_format(self) -> tuple[int, int]:
+        if self.game_variant_var.get() != "X01":
+            return 1, 1
         preset = self.preset_var.get()
         presets = {
             "Single leg": (1, 1),
@@ -662,6 +939,94 @@ class DartsUI(ctk.CTk):
         status = "Ended early" if ended_early else f"Winner: {winner}"
         return f"#{match_row['id']} | {played_at} | {status}"
 
+    def _open_db_manager(self) -> None:
+        self.refresh_history_options()
+        self.setup_frame.pack_forget()
+        self.game_frame.pack_forget()
+        self.stats_frame.pack_forget()
+        self.db_manager_frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+    def _back_from_db_manager(self) -> None:
+        self.db_manager_frame.pack_forget()
+        self.setup_frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+    def _clear_db_match_rows(self) -> None:
+        for row in self.db_rows:
+            row.destroy()
+        self.db_rows = []
+        self.db_match_check_vars = {}
+
+    def _on_match_checkbox_changed(self, match_id: int) -> None:
+        var = self.db_match_check_vars.get(match_id)
+        if var is None:
+            return
+        if var.get():
+            self.db_selected_ids.add(match_id)
+        else:
+            self.db_selected_ids.discard(match_id)
+
+        all_visible_ids = set(self.db_match_check_vars.keys())
+        if all_visible_ids:
+            self.db_select_all_var.set(all(match_id in self.db_selected_ids for match_id in all_visible_ids))
+        else:
+            self.db_select_all_var.set(False)
+        self._update_selected_count_badge()
+
+    def _toggle_select_all_matches(self) -> None:
+        should_select = self.db_select_all_var.get()
+        for match_id, var in self.db_match_check_vars.items():
+            var.set(should_select)
+            if should_select:
+                self.db_selected_ids.add(match_id)
+            else:
+                self.db_selected_ids.discard(match_id)
+        self._update_selected_count_badge()
+
+    def _update_selected_count_badge(self) -> None:
+        self.db_selected_count_var.set(f"Selected: {len(self.db_selected_ids)}")
+
+    def _render_db_match_rows(self, entries: list[dict[str, object]]) -> None:
+        self._clear_db_match_rows()
+        if not entries:
+            empty = ctk.CTkFrame(self.db_matches_scroll)
+            empty.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+            ctk.CTkLabel(empty, text="No matches found for current filter.").grid(row=0, column=0, sticky="w", padx=10, pady=10)
+            self.db_rows.append(empty)
+            self.db_select_all_var.set(False)
+            self._update_selected_count_badge()
+            return
+
+        for idx, row in enumerate(entries):
+            match_id = int(row["id"])
+            winner = str(row.get("winner_name") or "-")
+            played_at = str(row.get("played_at") or "")
+            ended_early = bool(row.get("ended_early"))
+            status = "Ended early" if ended_early else f"Winner: {winner}"
+
+            frame = ctk.CTkFrame(self.db_matches_scroll)
+            frame.grid(row=idx, column=0, sticky="ew", pady=(0, 6))
+            frame.grid_columnconfigure(1, weight=1)
+
+            var = tk.BooleanVar(value=match_id in self.db_selected_ids)
+            self.db_match_check_vars[match_id] = var
+            ctk.CTkCheckBox(
+                frame,
+                text="",
+                variable=var,
+                onvalue=True,
+                offvalue=False,
+                width=24,
+                command=lambda mid=match_id: self._on_match_checkbox_changed(mid),
+            ).grid(row=0, column=0, padx=(10, 6), pady=8)
+            ctk.CTkLabel(frame, text=f"#{match_id} | {played_at} | {status}", anchor="w").grid(
+                row=0, column=1, sticky="w", padx=(0, 10), pady=8
+            )
+
+            self.db_rows.append(frame)
+
+        self.db_select_all_var.set(all(var.get() for var in self.db_match_check_vars.values()))
+        self._update_selected_count_badge()
+
     def refresh_history_options(self) -> None:
         entries = list_matches(limit=200, player_name_query=self.history_search_var.get())
         self.history_option_to_id = {}
@@ -670,6 +1035,7 @@ class DartsUI(ctk.CTk):
             fallback = "No saved matches"
             self.history_menu.configure(values=[fallback])
             self.history_selection_var.set(fallback)
+            self._render_db_match_rows([])
             return
 
         labels: list[str] = []
@@ -680,10 +1046,37 @@ class DartsUI(ctk.CTk):
 
         self.history_menu.configure(values=labels)
         self.history_selection_var.set(labels[0])
+        self._render_db_match_rows(entries)
 
     def _clear_history_search(self) -> None:
         self.history_search_var.set("")
         self.refresh_history_options()
+
+    def _delete_checked_history(self) -> None:
+        if not self.db_selected_ids:
+            messagebox.showinfo("Match history", "No matches selected.")
+            return
+
+        ids_sorted = sorted(self.db_selected_ids)
+        preview = ", ".join(f"#{match_id}" for match_id in ids_sorted[:6])
+        if len(ids_sorted) > 6:
+            preview += ", ..."
+        confirmed = messagebox.askyesno(
+            "Delete matches",
+            f"Delete {len(ids_sorted)} selected match(es): {preview}? This cannot be undone.",
+        )
+        if not confirmed:
+            return
+
+        deleted_count = 0
+        for match_id in ids_sorted:
+            if delete_match(match_id):
+                deleted_count += 1
+
+        self.db_selected_ids.clear()
+        self.refresh_history_options()
+        self._update_selected_count_badge()
+        messagebox.showinfo("Match history", f"Deleted {deleted_count} match(es).")
 
     def _selected_history_match_id(self) -> int | None:
         option = self.history_selection_var.get()
@@ -800,6 +1193,12 @@ class DartsUI(ctk.CTk):
                 "total_scored",
                 "highest_score",
                 "highest_checkout",
+                "scores_100_plus",
+                "scores_140_plus",
+                "scores_180",
+                "checkout_attempts",
+                "checkout_successes",
+                "first9_scored",
             ])
 
             for record in match_data.get("players", []):
@@ -819,12 +1218,81 @@ class DartsUI(ctk.CTk):
                     record.get("total_scored"),
                     record.get("highest_score"),
                     record.get("highest_checkout"),
+                    record.get("scores_100_plus", 0),
+                    record.get("scores_140_plus", 0),
+                    record.get("scores_180", 0),
+                    record.get("checkout_attempts", 0),
+                    record.get("checkout_successes", 0),
+                    record.get("first9_scored", 0),
                 ])
 
         messagebox.showinfo("Match history", f"Exported CSV to:\n{file_path}")
 
     def _current_player(self) -> PlayerState:
         return self.players[(self.leg_start_player_index + self.turn_offset) % len(self.players)]
+
+    def _update_throw_strip_from_values(self, values: list[str]) -> None:
+        padded = (values + ["-", "-"])[0:3]
+        for idx, value in enumerate(padded):
+            self.throw_strip_vars[idx].set(value if value else "-")
+
+    def _set_throw_strip_idle(self) -> None:
+        self._update_throw_strip_from_values(["-", "-", "-"])
+
+    def _cricket_token_to_value(self, token: str) -> tuple[str, int, int] | None:
+        normalized = token.strip().upper()
+        if not normalized:
+            return None
+
+        if normalized in {"B", "SB", "S25"}:
+            return ("B", 1, 25)
+        if normalized in {"DB", "D25"}:
+            return ("B", 2, 25)
+
+        if len(normalized) < 2:
+            return None
+        mult = normalized[0]
+        if mult not in {"S", "D", "T"}:
+            return None
+        try:
+            number = int(normalized[1:])
+        except ValueError:
+            return None
+        if number < 15 or number > 20:
+            return None
+        marks = {"S": 1, "D": 2, "T": 3}[mult]
+        return (str(number), marks, number)
+
+    def _apply_cricket_throw(self, player: PlayerState, token: str) -> int | None:
+        parsed = self._cricket_token_to_value(token)
+        if parsed is None:
+            return None
+
+        target, marks, point_value = parsed
+        gained = 0
+        for _ in range(marks):
+            current = player.cricket_marks[target]
+            if current < 3:
+                player.cricket_marks[target] = current + 1
+            else:
+                if any(opponent.cricket_marks[target] < 3 for opponent in self.players if opponent is not player):
+                    player.cricket_points += point_value
+                    gained += point_value
+        return gained
+
+    def _cricket_player_can_win(self, player: PlayerState) -> bool:
+        all_closed = all(player.cricket_marks[target] >= 3 for target in CRICKET_TARGETS)
+        if not all_closed:
+            return False
+        return all(player.cricket_points >= opponent.cricket_points for opponent in self.players if opponent is not player)
+
+    def _update_timeline_label(self) -> None:
+        parts: list[str] = []
+        for set_idx in sorted(self.set_leg_winners.keys()):
+            winners = self.set_leg_winners[set_idx]
+            if winners:
+                parts.append(f"Set {set_idx}: {' | '.join(winners)}")
+        self.timeline_var.set("Timeline: " + (" ; ".join(parts) if parts else "-"))
 
     def _set_textbox(self, widget: ctk.CTkTextbox, text: str) -> None:
         widget.configure(state="normal")
@@ -938,6 +1406,15 @@ class DartsUI(ctk.CTk):
 
         self._ensure_scoreboard_rows()
 
+        if self.game_variant == "CRICKET":
+            self.score_header_primary.configure(text="Points")
+            self.score_header_legs.configure(text="Closed")
+            self.score_header_sets.configure(text="Sets")
+        else:
+            self.score_header_primary.configure(text="Remaining")
+            self.score_header_legs.configure(text="Legs")
+            self.score_header_sets.configure(text="Sets")
+
         for idx, state in enumerate(self.players):
             is_current = idx == active_index
             name_label = self.score_row_name_labels[idx]
@@ -947,8 +1424,13 @@ class DartsUI(ctk.CTk):
                 text=f"> {state.name}" if is_current else state.name,
                 font=ctk.CTkFont(weight="bold" if is_current else "normal"),
             )
-            remaining_label.configure(text=str(state.score))
-            legs_label.configure(text=f"{state.legs_in_set}/{self.legs_to_win_set}")
+            if self.game_variant == "CRICKET":
+                closed_count = sum(1 for target in CRICKET_TARGETS if state.cricket_marks[target] >= 3)
+                remaining_label.configure(text=str(state.cricket_points))
+                legs_label.configure(text=f"{closed_count}/7")
+            else:
+                remaining_label.configure(text=str(state.score))
+                legs_label.configure(text=f"{state.legs_in_set}/{self.legs_to_win_set}")
             sets_label.configure(text=f"{state.sets_won}/{self.sets_to_win_match}")
             self._apply_row_style(idx, active=is_current)
 
@@ -964,6 +1446,7 @@ class DartsUI(ctk.CTk):
     def start_match(self) -> None:
         try:
             names = self._parse_players()
+            self.game_variant = "CRICKET" if self.game_variant_var.get() == "Cricket" else "X01"
             self.start_score = self._resolve_start_score()
             self.legs_to_win_set, self.sets_to_win_match = self._resolve_format()
         except ValueError as error:
@@ -971,11 +1454,17 @@ class DartsUI(ctk.CTk):
             return
 
         self.players = [PlayerState(name=name, score=self.start_score) for name in names]
+        if self.game_variant == "CRICKET":
+            for player in self.players:
+                player.score = 0
         self.set_number = 1
         self.leg_number = 1
         self.leg_start_player_index = 0
         self.turn_offset = 0
+        self.set_leg_winners = {1: []}
         self._hide_checkout_prompt()
+        self._set_throw_strip_idle()
+        self._apply_visual_theme()
 
         self.setup_frame.pack_forget()
         self.game_frame.pack(fill="both", expand=True, padx=16, pady=16)
@@ -993,17 +1482,44 @@ class DartsUI(ctk.CTk):
         current_index = (self.leg_start_player_index + self.turn_offset) % len(self.players)
         self.round_label_var.set(f"Set {self.set_number}, Leg {self.leg_number}")
         self.current_label_var.set(f"Current player: {player.name}")
+        self.dashboard_current_var.set(f"Current: {player.name}")
 
-        hints = checkout_suggestions(player.score)
-        if hints:
-            self.checkout_label_var.set(hints[0])
-            self.checkout_banner.grid()
-            self.checkout_banner.configure(fg_color=("#fde68a", "#78350f"), border_color="#f59e0b")
-            self.checkout_title_label.configure(text="CHECKOUT AVAILABLE")
-            self.checkout_title_label.configure(text_color=("#7c2d12", "#fef3c7"))
-            self.checkout_value_label.configure(text_color=("#431407", "#fef9c3"))
-        else:
+        if self.game_variant == "CRICKET":
+            self.dashboard_primary_var.set(f"Points: {player.cricket_points}")
+            closed_count = sum(1 for target in CRICKET_TARGETS if player.cricket_marks[target] >= 3)
+            self.dashboard_chance_var.set(f"Closed targets: {closed_count}/7")
+            self.checkout_route_primary_var.set("")
+            self.checkout_route_backup_var.set("")
             self.checkout_banner.grid_remove()
+        else:
+            self.dashboard_primary_var.set(f"Remaining: {player.score}")
+
+            hints = checkout_suggestions(player.score)
+            valid_counts = possible_checkout_dart_counts(player.score)
+            if hints:
+                self.checkout_route_primary_var.set(hints[0])
+                backups = checkout_suggestions(player.score, limit=3)[1:]
+                self.checkout_route_backup_var.set(
+                    "Backups: " + (" | ".join(backups) if backups else "No backup route from chart")
+                )
+                self.dashboard_chance_var.set(
+                    "Checkout chance: " + ("/".join(str(count) for count in valid_counts) if valid_counts else "-")
+                )
+                theme = self.theme_map.get(self.theme_var.get(), self.theme_map["Arena"])
+                self.checkout_banner.grid()
+                self.checkout_banner.configure(
+                    fg_color=(str(theme["checkout_light"]), str(theme["checkout_dark"])),
+                    border_color=str(theme["checkout_border"]),
+                )
+                self.checkout_title_label.configure(text="CHECKOUT AVAILABLE")
+            else:
+                self.dashboard_chance_var.set("Checkout chance: None")
+                self.checkout_route_primary_var.set("")
+                self.checkout_route_backup_var.set("")
+                self.checkout_banner.grid_remove()
+
+        self.dashboard_darts_var.set("Darts in hand: 3")
+        self._update_timeline_label()
         self._render_scoreboard(current_index, transition_from_index)
 
     def _show_checkout_prompt(self, player_name: str, valid_counts: list[int]) -> None:
@@ -1044,6 +1560,7 @@ class DartsUI(ctk.CTk):
         checkout_total = player.score
 
         player.highest_checkout = max(player.highest_checkout, checkout_total)
+        player.checkout_successes += 1
         player.score = 0
         player.total_scored += score
         player.highest_score = max(player.highest_score, score)
@@ -1070,13 +1587,28 @@ class DartsUI(ctk.CTk):
             self._append_log("Confirm checkout darts first.")
             return
 
+        if self.game_variant == "CRICKET":
+            self._submit_cricket_turn()
+            return
+
         score = self._resolve_turn_score()
         if score is None:
             return
 
         player = self._current_player()
         player.turns_played += 1
+        player.leg_visits += 1
         darts_used_this_turn = 3
+
+        if player.leg_visits <= 3:
+            player.first9_scored += score
+
+        if score >= 180:
+            player.scores_180 += 1
+        if score >= 140:
+            player.scores_140_plus += 1
+        if score >= 100:
+            player.scores_100_plus += 1
 
         if score > player.score:
             player.darts_thrown += darts_used_this_turn
@@ -1094,6 +1626,7 @@ class DartsUI(ctk.CTk):
         if remaining == 0:
             checkout_total = player.score
             valid_counts = possible_checkout_dart_counts(checkout_total)
+            player.checkout_attempts += 1
             if not valid_counts:
                 player.darts_thrown += darts_used_this_turn
                 self._append_log(f"{player.name}: bust ({checkout_total} has no legal checkout).")
@@ -1119,12 +1652,17 @@ class DartsUI(ctk.CTk):
         self.turn_offset += 1
         self.score_entry.delete(0, "end")
         self._clear_all_darts()
+        self._set_throw_strip_idle()
         self.refresh_game_view(transition_from_index=previous_index)
         self._focus_score_input()
 
     def _reset_leg_scores(self) -> None:
         for player in self.players:
-            player.score = self.start_score
+            player.score = self.start_score if self.game_variant == "X01" else 0
+            player.leg_visits = 0
+            if self.game_variant == "CRICKET":
+                player.cricket_points = 0
+                player.cricket_marks = {target: 0 for target in CRICKET_TARGETS}
 
     def _reset_set_legs(self) -> None:
         for player in self.players:
@@ -1143,6 +1681,12 @@ class DartsUI(ctk.CTk):
                     "total_scored": player.total_scored,
                     "highest_score": player.highest_score,
                     "highest_checkout": player.highest_checkout,
+                    "scores_100_plus": player.scores_100_plus,
+                    "scores_140_plus": player.scores_140_plus,
+                    "scores_180": player.scores_180,
+                    "checkout_attempts": player.checkout_attempts,
+                    "checkout_successes": player.checkout_successes,
+                    "first9_scored": player.first9_scored,
                 }
             )
         return records
@@ -1155,8 +1699,13 @@ class DartsUI(ctk.CTk):
             total_scored = int(record.get("total_scored", 0))
             average_score = total_scored / turns_played if turns_played else 0.0
             three_dart_average = (total_scored * 3) / darts_thrown if darts_thrown else 0.0
+            first9_scored = int(record.get("first9_scored", 0))
+            first9_average = first9_scored / 3 if first9_scored else 0.0
             highest_checkout = int(record.get("highest_checkout", 0))
             highest_checkout_text = str(highest_checkout) if highest_checkout else "-"
+            checkout_attempts = int(record.get("checkout_attempts", 0))
+            checkout_successes = int(record.get("checkout_successes", 0))
+            checkout_pct = (checkout_successes / checkout_attempts * 100) if checkout_attempts else 0.0
 
             lines.extend(
                 [
@@ -1166,8 +1715,11 @@ class DartsUI(ctk.CTk):
                     f"  Legs won: {int(record.get('legs_won', 0))}",
                     f"  Average score (per turn): {average_score:.2f}",
                     f"  Three-dart average: {three_dart_average:.2f}",
+                    f"  First 9 average: {first9_average:.2f}",
                     f"  Highest score: {int(record.get('highest_score', 0))}",
                     f"  Highest checkout: {highest_checkout_text}",
+                    f"  Checkout: {checkout_successes}/{checkout_attempts} ({checkout_pct:.1f}%)",
+                    f"  100+/140+/180: {int(record.get('scores_100_plus', 0))}/{int(record.get('scores_140_plus', 0))}/{int(record.get('scores_180', 0))}",
                 ]
             )
         return "\n".join(lines)
@@ -1190,11 +1742,13 @@ class DartsUI(ctk.CTk):
 
         self.setup_frame.pack_forget()
         self.game_frame.pack_forget()
+        self.db_manager_frame.pack_forget()
         self.stats_frame.pack(fill="both", expand=True, padx=16, pady=16)
 
     def _handle_leg_winner(self, player: PlayerState) -> None:
         player.legs_won += 1
         player.legs_in_set += 1
+        self.set_leg_winners.setdefault(self.set_number, []).append(player.name)
         self._append_log(f"{player.name} won leg {self.leg_number}.")
 
         if player.legs_in_set >= self.legs_to_win_set:
@@ -1215,6 +1769,7 @@ class DartsUI(ctk.CTk):
 
             self._reset_set_legs()
             self.set_number += 1
+            self.set_leg_winners.setdefault(self.set_number, [])
             self.leg_number = 1
         else:
             self.leg_number += 1
@@ -1245,9 +1800,14 @@ class DartsUI(ctk.CTk):
             self.after_cancel(self.turn_animation_after_id)
             self.turn_animation_after_id = None
         self.players = []
+        self.db_selected_ids.clear()
+        self.db_select_all_var.set(False)
+        self._update_selected_count_badge()
         self._hide_checkout_prompt()
+        self._set_throw_strip_idle()
         self.game_frame.pack_forget()
         self.stats_frame.pack_forget()
+        self.db_manager_frame.pack_forget()
         self.setup_frame.pack(fill="both", expand=True, padx=16, pady=16)
         self.refresh_history_options()
 

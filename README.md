@@ -8,14 +8,17 @@ It supports multiplayer matches, common 01 game modes, legs/sets formats, checko
 
 - Multiple players
 - Game modes: 101, 301, 501, 701, or custom start score
+- Game variants: X01 and Cricket
 - Match formats with legs and sets
 - Bust rules and legal checkout validation
 - Checkout suggestions from `checkout.json`
 - End-of-match statistics (average, 3-dart average, highest score, highest checkout)
 - Persistent match history (SQLite) with in-app selection and stats view
 - Match history tools: search by player, export to JSON/CSV, delete saved matches
+- Dedicated in-app Database Manager page with multi-select and select-all delete
 - Modern desktop UI built with CustomTkinter
 - Optional per-dart numpad input (with undo/clear)
+- Live dashboard cards, timeline, and active-player transition animation
 
 ## Requirements
 
@@ -109,3 +112,4 @@ python darts_counter_ui.py
 - Per-dart numpad multiplier (`x2`/`x3`) applies to numeric keypad dart entry only; manually typed dart values are taken as final values.
 - Checkout suggestions only appear for scores present in `checkout.json`.
 - Match history search is currently player-name based.
+- Cricket entry currently uses manual hit tokens (example: `T20,S19,DB`).

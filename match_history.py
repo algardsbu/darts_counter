@@ -43,10 +43,29 @@ def init_db() -> None:
                 total_scored INTEGER NOT NULL,
                 highest_score INTEGER NOT NULL,
                 highest_checkout INTEGER NOT NULL,
+                scores_100_plus INTEGER NOT NULL DEFAULT 0,
+                scores_140_plus INTEGER NOT NULL DEFAULT 0,
+                scores_180 INTEGER NOT NULL DEFAULT 0,
+                checkout_attempts INTEGER NOT NULL DEFAULT 0,
+                checkout_successes INTEGER NOT NULL DEFAULT 0,
+                first9_scored INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
             )
             """
         )
+
+        for statement in (
+            "ALTER TABLE match_players ADD COLUMN scores_100_plus INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE match_players ADD COLUMN scores_140_plus INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE match_players ADD COLUMN scores_180 INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE match_players ADD COLUMN checkout_attempts INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE match_players ADD COLUMN checkout_successes INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE match_players ADD COLUMN first9_scored INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                connection.execute(statement)
+            except sqlite3.OperationalError:
+                pass
 
 
 def save_match(
@@ -91,8 +110,14 @@ def save_match(
                     darts_thrown,
                     total_scored,
                     highest_score,
-                    highest_checkout
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    highest_checkout,
+                    scores_100_plus,
+                    scores_140_plus,
+                    scores_180,
+                    checkout_attempts,
+                    checkout_successes,
+                    first9_scored
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     match_id,
@@ -104,6 +129,12 @@ def save_match(
                     player["total_scored"],
                     player["highest_score"],
                     player["highest_checkout"],
+                    player.get("scores_100_plus", 0),
+                    player.get("scores_140_plus", 0),
+                    player.get("scores_180", 0),
+                    player.get("checkout_attempts", 0),
+                    player.get("checkout_successes", 0),
+                    player.get("first9_scored", 0),
                 ),
             )
         return match_id
@@ -157,7 +188,9 @@ def get_match(match_id: int) -> Optional[Dict[str, Any]]:
         player_rows = connection.execute(
             """
             SELECT name, sets_won, legs_won, turns_played, darts_thrown,
-                   total_scored, highest_score, highest_checkout
+                   total_scored, highest_score, highest_checkout,
+                   scores_100_plus, scores_140_plus, scores_180,
+                   checkout_attempts, checkout_successes, first9_scored
             FROM match_players
             WHERE match_id = ?
             ORDER BY id ASC
