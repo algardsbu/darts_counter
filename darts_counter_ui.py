@@ -689,10 +689,17 @@ class DartsUI(ctk.CTk):
             entry.configure(state=state)
         for btn in self.numpad_buttons:
             btn.configure(state=state)
-        self.multiplier_switch.configure(state=state)
-        self.input_mode_switch.configure(state=state)
+        self._safe_configure_state(self.multiplier_switch, state)
+        self._safe_configure_state(self.input_mode_switch, state)
         if enabled:
             self._sync_cricket_input_controls()
+
+    @staticmethod
+    def _safe_configure_state(widget: object, state: str) -> None:
+        try:
+            widget.configure(state=state)
+        except Exception:
+            pass
 
     def _select_dart(self, index: int) -> None:
         self.selected_dart_index = max(0, min(2, index))
@@ -864,10 +871,8 @@ class DartsUI(ctk.CTk):
         cricket_per_dart = is_cricket and self.input_mode_var.get() == "Per dart"
         controls_state = "disabled" if cricket_per_dart else "normal"
         for btn in self.numpad_buttons:
-            if btn.cget("state") != "disabled":
-                btn.configure(state=controls_state)
-        if self.multiplier_switch.cget("state") != "disabled":
-            self.multiplier_switch.configure(state=controls_state)
+            btn.configure(state=controls_state)
+        self._safe_configure_state(self.multiplier_switch, controls_state)
 
     def _submit_cricket_turn(self) -> None:
         tokens = self._resolve_cricket_tokens()
