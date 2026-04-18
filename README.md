@@ -12,6 +12,8 @@ It supports multiplayer matches, common 01 game modes, legs/sets formats, checko
 - Bust rules and legal checkout validation
 - Checkout suggestions from `checkout.json`
 - End-of-match statistics (average, 3-dart average, highest score, highest checkout)
+- Persistent match history (SQLite) with in-app selection and stats view
+- Match history tools: search by player, export to JSON/CSV, delete saved matches
 - Modern desktop UI built with CustomTkinter
 - Optional per-dart numpad input (with undo/clear)
 
@@ -25,7 +27,7 @@ It supports multiplayer matches, common 01 game modes, legs/sets formats, checko
 ### 1) Clone the project
 
 ```bash
-git clone <your-repo-url>
+git clone git@github.com:algardsbu/darts_counter.git
 cd darts_counter
 ```
 
@@ -93,7 +95,9 @@ python darts_counter_ui.py
 
 - `darts_counter.py` - core CLI app and rules logic
 - `darts_counter_ui.py` - CustomTkinter desktop UI
+- `match_history.py` - SQLite storage for saved match history
 - `checkout.json` - checkout chart used for suggestions
+- `match_history.sqlite3` - auto-created local history database
 
 ## Notes
 
@@ -104,4 +108,4 @@ python darts_counter_ui.py
 
 - Per-dart numpad multiplier (`x2`/`x3`) applies to numeric keypad dart entry only; manually typed dart values are taken as final values.
 - Checkout suggestions only appear for scores present in `checkout.json`.
-- Match history is in-memory only for now (no persistent save/load of completed matches).
+- Match history search is currently player-name based.

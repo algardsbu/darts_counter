@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import csv
+import json
 from dataclasses import dataclass
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
 from darts_counter import checkout_suggestions, possible_checkout_dart_counts
+from match_history import delete_match, get_match, init_db, list_matches, save_match
 
 
 @dataclass
@@ -67,6 +70,8 @@ class DartsUI(ctk.CTk):
         self.dart_base_inputs = ["", "", ""]
         self.per_dart_total_var = tk.StringVar(value="Per-dart total: 0")
         self.dart_multiplier_var = tk.StringVar(value="x1")
+        self.history_selection_var = tk.StringVar(value="No saved matches")
+        self.history_search_var = tk.StringVar(value="")
 
         self.extra_player_vars: list[tk.StringVar] = []
         self.extra_player_entries: list[ctk.CTkEntry] = []
@@ -77,6 +82,7 @@ class DartsUI(ctk.CTk):
         self.numpad_buttons: list[ctk.CTkButton] = []
         self.selected_dart_index = 0
         self.turn_animation_after_id: str | None = None
+        self.history_option_to_id: dict[str, int] = {}
 
         self.row_normal_light = "#e5e7eb"
         self.row_normal_dark = "#1f2937"
@@ -90,6 +96,9 @@ class DartsUI(ctk.CTk):
         self._build_setup_ui()
         self._build_game_ui()
         self._build_stats_ui()
+
+        init_db()
+        self.refresh_history_options()
 
         self.setup_frame.pack(fill="both", expand=True, padx=16, pady=16)
 
@@ -183,6 +192,37 @@ class DartsUI(ctk.CTk):
         ctk.CTkButton(self.setup_frame, text="Start Match", command=self.start_match, width=140).grid(
             row=10, column=0, sticky="w", padx=16, pady=(8, 16)
         )
+
+        history_frame = ctk.CTkFrame(self.setup_frame)
+        history_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 16))
+        history_frame.grid_columnconfigure(0, weight=1)
+        history_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(history_frame, text="Match history").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
+        search_row = ctk.CTkFrame(history_frame, fg_color="transparent")
+        search_row.grid(row=0, column=1, sticky="e", padx=10, pady=(10, 4))
+        ctk.CTkLabel(search_row, text="Search player").grid(row=0, column=0, padx=(0, 6))
+        self.history_search_entry = ctk.CTkEntry(search_row, textvariable=self.history_search_var, width=180)
+        self.history_search_entry.grid(row=0, column=1, padx=(0, 6))
+        self.history_search_entry.bind("<Return>", lambda _event: self.refresh_history_options())
+        ctk.CTkButton(search_row, text="Apply", command=self.refresh_history_options, width=80).grid(row=0, column=2, padx=(0, 6))
+        ctk.CTkButton(search_row, text="Clear", command=self._clear_history_search, width=80).grid(row=0, column=3)
+
+        self.history_menu = ctk.CTkOptionMenu(
+            history_frame,
+            variable=self.history_selection_var,
+            values=["No saved matches"],
+            width=420,
+        )
+        self.history_menu.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+
+        actions = ctk.CTkFrame(history_frame, fg_color="transparent")
+        actions.grid(row=1, column=1, sticky="e", padx=10, pady=(0, 10))
+        ctk.CTkButton(actions, text="Refresh", command=self.refresh_history_options, width=100).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(actions, text="View selected", command=self._show_selected_history, width=120).grid(row=0, column=1, padx=(0, 8))
+        ctk.CTkButton(actions, text="Export JSON", command=self._export_selected_history_json, width=110).grid(row=0, column=2, padx=(0, 8))
+        ctk.CTkButton(actions, text="Export CSV", command=self._export_selected_history_csv, width=100).grid(row=0, column=3, padx=(0, 8))
+        ctk.CTkButton(actions, text="Delete", command=self._delete_selected_history, width=90).grid(row=0, column=4)
 
     def _build_game_ui(self) -> None:
         self.game_frame.grid_columnconfigure(0, weight=2)
@@ -366,17 +406,17 @@ class DartsUI(ctk.CTk):
         ctk.CTkLabel(
             self.stats_frame,
             textvariable=self.stats_title_var,
-            font=ctk.CTkFont(size=24, weight="bold"),
+            font=ctk.CTkFont(size=30, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 6))
 
         ctk.CTkLabel(
             self.stats_frame,
             textvariable=self.stats_subtitle_var,
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(size=18),
             text_color=("#475569", "#cbd5e1"),
         ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 10))
 
-        self.stats_textbox = ctk.CTkTextbox(self.stats_frame)
+        self.stats_textbox = ctk.CTkTextbox(self.stats_frame, font=ctk.CTkFont(size=18), wrap="word")
         self.stats_textbox.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 12))
         self.stats_textbox.configure(state="disabled")
 
@@ -614,6 +654,174 @@ class DartsUI(ctk.CTk):
         if value < 1:
             raise ValueError(f"{label.capitalize()} must be at least 1.")
         return value
+
+    def _history_option_label(self, match_row: dict[str, object]) -> str:
+        winner = str(match_row.get("winner_name") or "-")
+        played_at = str(match_row.get("played_at") or "")
+        ended_early = bool(match_row.get("ended_early"))
+        status = "Ended early" if ended_early else f"Winner: {winner}"
+        return f"#{match_row['id']} | {played_at} | {status}"
+
+    def refresh_history_options(self) -> None:
+        entries = list_matches(limit=200, player_name_query=self.history_search_var.get())
+        self.history_option_to_id = {}
+
+        if not entries:
+            fallback = "No saved matches"
+            self.history_menu.configure(values=[fallback])
+            self.history_selection_var.set(fallback)
+            return
+
+        labels: list[str] = []
+        for row in entries:
+            label = self._history_option_label(row)
+            labels.append(label)
+            self.history_option_to_id[label] = int(row["id"])
+
+        self.history_menu.configure(values=labels)
+        self.history_selection_var.set(labels[0])
+
+    def _clear_history_search(self) -> None:
+        self.history_search_var.set("")
+        self.refresh_history_options()
+
+    def _selected_history_match_id(self) -> int | None:
+        option = self.history_selection_var.get()
+        return self.history_option_to_id.get(option)
+
+    def _show_selected_history(self) -> None:
+        match_id = self._selected_history_match_id()
+        if match_id is None:
+            messagebox.showinfo("Match history", "No saved match selected.")
+            return
+
+        match_data = get_match(match_id)
+        if match_data is None:
+            messagebox.showerror("Match history", "Could not load selected match.")
+            self.refresh_history_options()
+            return
+
+        ended_early = bool(match_data.get("ended_early"))
+        winner_name = str(match_data.get("winner_name") or "-")
+        played_at = str(match_data.get("played_at") or "")
+        title = f"Saved match #{match_id}"
+        subtitle = (
+            f"{played_at} | Ended early"
+            if ended_early
+            else f"{played_at} | Winner: {winner_name}"
+        )
+
+        player_records = match_data.get("players", [])
+        stats_text = self._format_stats_text(player_records)
+        self._show_stats_screen(title, subtitle, stats_text)
+
+    def _delete_selected_history(self) -> None:
+        match_id = self._selected_history_match_id()
+        if match_id is None:
+            messagebox.showinfo("Match history", "No saved match selected.")
+            return
+
+        confirmed = messagebox.askyesno("Delete match", f"Delete saved match #{match_id}? This cannot be undone.")
+        if not confirmed:
+            return
+
+        deleted = delete_match(match_id)
+        if not deleted:
+            messagebox.showerror("Match history", "Could not delete selected match.")
+            return
+
+        self.refresh_history_options()
+        messagebox.showinfo("Match history", f"Deleted match #{match_id}.")
+
+    def _export_selected_history_json(self) -> None:
+        match_id = self._selected_history_match_id()
+        if match_id is None:
+            messagebox.showinfo("Match history", "No saved match selected.")
+            return
+
+        match_data = get_match(match_id)
+        if match_data is None:
+            messagebox.showerror("Match history", "Could not load selected match.")
+            self.refresh_history_options()
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export match as JSON",
+            defaultextension=".json",
+            initialfile=f"match_{match_id}.json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        with open(file_path, "w", encoding="utf-8") as file_handle:
+            json.dump(match_data, file_handle, indent=2)
+
+        messagebox.showinfo("Match history", f"Exported JSON to:\n{file_path}")
+
+    def _export_selected_history_csv(self) -> None:
+        match_id = self._selected_history_match_id()
+        if match_id is None:
+            messagebox.showinfo("Match history", "No saved match selected.")
+            return
+
+        match_data = get_match(match_id)
+        if match_data is None:
+            messagebox.showerror("Match history", "Could not load selected match.")
+            self.refresh_history_options()
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export match as CSV",
+            defaultextension=".csv",
+            initialfile=f"match_{match_id}.csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        with open(file_path, "w", encoding="utf-8", newline="") as file_handle:
+            writer = csv.writer(file_handle)
+            writer.writerow([
+                "match_id",
+                "played_at",
+                "winner_name",
+                "ended_early",
+                "start_score",
+                "legs_to_win_set",
+                "sets_to_win_match",
+                "player_name",
+                "sets_won",
+                "legs_won",
+                "turns_played",
+                "darts_thrown",
+                "total_scored",
+                "highest_score",
+                "highest_checkout",
+            ])
+
+            for record in match_data.get("players", []):
+                writer.writerow([
+                    match_data.get("id"),
+                    match_data.get("played_at"),
+                    match_data.get("winner_name") or "",
+                    1 if bool(match_data.get("ended_early")) else 0,
+                    match_data.get("start_score"),
+                    match_data.get("legs_to_win_set"),
+                    match_data.get("sets_to_win_match"),
+                    record.get("name"),
+                    record.get("sets_won"),
+                    record.get("legs_won"),
+                    record.get("turns_played"),
+                    record.get("darts_thrown"),
+                    record.get("total_scored"),
+                    record.get("highest_score"),
+                    record.get("highest_checkout"),
+                ])
+
+        messagebox.showinfo("Match history", f"Exported CSV to:\n{file_path}")
 
     def _current_player(self) -> PlayerState:
         return self.players[(self.leg_start_player_index + self.turn_offset) % len(self.players)]
@@ -922,30 +1130,63 @@ class DartsUI(ctk.CTk):
         for player in self.players:
             player.legs_in_set = 0
 
-    def _match_stats_text(self) -> str:
-        lines: list[str] = ["Match statistics"]
+    def _current_players_as_records(self) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
         for player in self.players:
-            average_score = player.total_scored / player.turns_played if player.turns_played else 0.0
-            three_dart_average = (player.total_scored * 3) / player.darts_thrown if player.darts_thrown else 0.0
-            highest_checkout_text = str(player.highest_checkout) if player.highest_checkout else "-"
+            records.append(
+                {
+                    "name": player.name,
+                    "sets_won": player.sets_won,
+                    "legs_won": player.legs_won,
+                    "turns_played": player.turns_played,
+                    "darts_thrown": player.darts_thrown,
+                    "total_scored": player.total_scored,
+                    "highest_score": player.highest_score,
+                    "highest_checkout": player.highest_checkout,
+                }
+            )
+        return records
+
+    def _format_stats_text(self, player_records: list[dict[str, object]]) -> str:
+        lines: list[str] = ["Match statistics"]
+        for record in player_records:
+            turns_played = int(record.get("turns_played", 0))
+            darts_thrown = int(record.get("darts_thrown", 0))
+            total_scored = int(record.get("total_scored", 0))
+            average_score = total_scored / turns_played if turns_played else 0.0
+            three_dart_average = (total_scored * 3) / darts_thrown if darts_thrown else 0.0
+            highest_checkout = int(record.get("highest_checkout", 0))
+            highest_checkout_text = str(highest_checkout) if highest_checkout else "-"
+
             lines.extend(
                 [
                     "",
-                    player.name,
-                    f"  Sets won: {player.sets_won}",
-                    f"  Legs won: {player.legs_won}",
+                    str(record.get("name", "Player")),
+                    f"  Sets won: {int(record.get('sets_won', 0))}",
+                    f"  Legs won: {int(record.get('legs_won', 0))}",
                     f"  Average score (per turn): {average_score:.2f}",
                     f"  Three-dart average: {three_dart_average:.2f}",
-                    f"  Highest score: {player.highest_score}",
+                    f"  Highest score: {int(record.get('highest_score', 0))}",
                     f"  Highest checkout: {highest_checkout_text}",
                 ]
             )
         return "\n".join(lines)
 
-    def _show_stats_screen(self, winner_name: str, *, ended_early: bool = False) -> None:
-        self.stats_title_var.set("Match ended early" if ended_early else f"{winner_name} wins the match")
-        self.stats_subtitle_var.set("Final player statistics")
-        self._set_textbox(self.stats_textbox, self._match_stats_text())
+    def _save_match_history(self, *, winner_name: str | None, ended_early: bool) -> None:
+        save_match(
+            start_score=self.start_score,
+            legs_to_win_set=self.legs_to_win_set,
+            sets_to_win_match=self.sets_to_win_match,
+            ended_early=ended_early,
+            winner_name=winner_name,
+            players=self._current_players_as_records(),
+        )
+        self.refresh_history_options()
+
+    def _show_stats_screen(self, title: str, subtitle: str, stats_text: str) -> None:
+        self.stats_title_var.set(title)
+        self.stats_subtitle_var.set(subtitle)
+        self._set_textbox(self.stats_textbox, stats_text)
 
         self.setup_frame.pack_forget()
         self.game_frame.pack_forget()
@@ -963,7 +1204,12 @@ class DartsUI(ctk.CTk):
             if player.sets_won >= self.sets_to_win_match:
                 self.refresh_game_view()
                 self._append_log(f"{player.name} won the match.")
-                self._show_stats_screen(player.name)
+                self._save_match_history(winner_name=player.name, ended_early=False)
+                self._show_stats_screen(
+                    f"{player.name} wins the match",
+                    "Final player statistics",
+                    self._format_stats_text(self._current_players_as_records()),
+                )
                 self.score_entry.delete(0, "end")
                 return
 
@@ -987,7 +1233,12 @@ class DartsUI(ctk.CTk):
         if not confirmed:
             return
         self._append_log("Match ended manually.")
-        self._show_stats_screen("", ended_early=True)
+        self._save_match_history(winner_name=None, ended_early=True)
+        self._show_stats_screen(
+            "Match ended early",
+            "Final player statistics",
+            self._format_stats_text(self._current_players_as_records()),
+        )
 
     def reset_to_setup(self) -> None:
         if self.turn_animation_after_id is not None:
@@ -998,6 +1249,7 @@ class DartsUI(ctk.CTk):
         self.game_frame.pack_forget()
         self.stats_frame.pack_forget()
         self.setup_frame.pack(fill="both", expand=True, padx=16, pady=16)
+        self.refresh_history_options()
 
 
 def main() -> None:
