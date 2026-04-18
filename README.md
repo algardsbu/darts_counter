@@ -4,6 +4,10 @@ A Python darts scoring app with both CLI and desktop UI modes.
 
 It supports multiplayer matches, common 01 game modes, legs/sets formats, checkout hints, and match statistics.
 
+## Warning
+
+This project is mostly vibe-coded. Expect rapid iterations, rough edges, and occasional weirdness.
+
 ## Features
 
 - Multiple players
@@ -30,7 +34,7 @@ It supports multiplayer matches, common 01 game modes, legs/sets formats, checko
 ### 1) Clone the project
 
 ```bash
-git clone git@github.com:algardsbu/darts_counter.git
+git clone https://github.com/algardsbu/darts_counter.git
 cd darts_counter
 ```
 
