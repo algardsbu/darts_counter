@@ -98,6 +98,7 @@ class DartsUI(ctk.CTk):
         self.checkout_route_backup_var = tk.StringVar(value="")
         self.timeline_var = tk.StringVar(value="Timeline: -")
         self.throw_strip_vars = [tk.StringVar(value="-") for _ in range(3)]
+        self.per_dart_label_vars = [tk.StringVar(value=f"Dart {idx + 1}") for idx in range(3)]
 
         self.extra_player_vars: list[tk.StringVar] = []
         self.extra_player_entries: list[ctk.CTkEntry] = []
@@ -405,7 +406,9 @@ class DartsUI(ctk.CTk):
         self.per_dart_frame.grid_columnconfigure(2, weight=1)
 
         for idx, score_var in enumerate(self.dart_score_vars):
-            ctk.CTkLabel(self.per_dart_frame, text=f"Dart {idx + 1}").grid(row=0, column=idx, sticky="w", padx=8, pady=(8, 2))
+            ctk.CTkLabel(self.per_dart_frame, textvariable=self.per_dart_label_vars[idx]).grid(
+                row=0, column=idx, sticky="w", padx=8, pady=(8, 2)
+            )
             entry = ctk.CTkEntry(self.per_dart_frame, textvariable=score_var, width=110)
             entry.grid(row=1, column=idx, sticky="w", padx=8, pady=(0, 8))
             entry.bind("<FocusIn>", lambda _event, i=idx: self._select_dart(i))
@@ -614,16 +617,19 @@ class DartsUI(ctk.CTk):
             self.input_mode_switch.configure(state="normal")
             self.score_input_label_var.set("3-dart score")
             self.score_entry.configure(placeholder_text="")
+            for idx, label_var in enumerate(self.per_dart_label_vars):
+                label_var.set(f"Dart {idx + 1}")
         else:
             self.mode_menu.configure(state="disabled")
             self.custom_score_entry.grid_remove()
             self.preset_menu.configure(state="disabled")
             self.custom_match_frame.grid_remove()
-            self.input_mode_var.set("Total")
-            self._on_input_mode_changed()
-            self.input_mode_switch.configure(state="disabled")
-            self.score_input_label_var.set("Cricket hits (e.g. T20,S19,DB)")
+            self.input_mode_switch.configure(state="normal")
+            self.score_input_label_var.set("Cricket hits")
             self.score_entry.configure(placeholder_text="T20,S20,DB")
+            for idx, label_var in enumerate(self.per_dart_label_vars):
+                label_var.set(f"Hit {idx + 1}")
+        self._on_input_mode_changed()
 
     def _on_theme_changed(self, _selection: str = "") -> None:
         self._apply_visual_theme()
@@ -666,6 +672,7 @@ class DartsUI(ctk.CTk):
             self.score_entry.focus_set()
             total_text = self.score_entry.get().strip()
             self._update_throw_strip_from_values([f"Total: {total_text or '-'}", "-", "-"])
+        self._sync_cricket_input_controls()
 
     def _focus_score_input(self) -> None:
         if self.input_mode_var.get() == "Per dart":
@@ -684,6 +691,8 @@ class DartsUI(ctk.CTk):
             btn.configure(state=state)
         self.multiplier_switch.configure(state=state)
         self.input_mode_switch.configure(state=state)
+        if enabled:
+            self._sync_cricket_input_controls()
 
     def _select_dart(self, index: int) -> None:
         self.selected_dart_index = max(0, min(2, index))
@@ -703,6 +712,14 @@ class DartsUI(ctk.CTk):
         return self.dart_score_vars[self.selected_dart_index]
 
     def _update_per_dart_total(self) -> None:
+        if self.game_variant == "CRICKET":
+            hits_entered = sum(1 for var in self.dart_score_vars if var.get().strip())
+            self.per_dart_total_var.set(f"Cricket hits entered: {hits_entered}")
+            if self.input_mode_var.get() == "Per dart":
+                display_values = [var.get().strip() or "-" for var in self.dart_score_vars]
+                self._update_throw_strip_from_values(display_values)
+            return
+
         total = 0
         display_values: list[str] = []
         for var in self.dart_score_vars:
@@ -815,14 +832,25 @@ class DartsUI(ctk.CTk):
         return score
 
     def _resolve_cricket_tokens(self) -> list[str] | None:
-        raw = self.score_entry.get().strip()
-        if not raw:
-            messagebox.showerror("Invalid input", "Enter up to 3 cricket hits, for example: T20,S19,DB")
+        if self.input_mode_var.get() == "Per dart":
+            tokens = [var.get().strip().upper() for var in self.dart_score_vars if var.get().strip()]
+            if not tokens:
+                messagebox.showerror("Invalid input", "Enter at least one cricket hit.")
+                return None
+        else:
+            raw = self.score_entry.get().strip()
+            if not raw:
+                messagebox.showerror("Invalid input", "Enter up to 3 cricket hits, for example: T20,S19,DB")
+                return None
+
+            tokens = [token.strip().upper() for token in raw.replace(" ", "").split(",") if token.strip()]
+
+        if self.input_mode_var.get() != "Per dart" and len(tokens) > 3:
+            messagebox.showerror("Invalid input", "Enter between 1 and 3 comma-separated hits.")
             return None
 
-        tokens = [token.strip() for token in raw.replace(" ", "").split(",") if token.strip()]
-        if not tokens or len(tokens) > 3:
-            messagebox.showerror("Invalid input", "Enter between 1 and 3 comma-separated hits.")
+        if len(tokens) > 3:
+            messagebox.showerror("Invalid input", "Enter at most 3 cricket hits.")
             return None
 
         for token in tokens:
@@ -830,6 +858,16 @@ class DartsUI(ctk.CTk):
                 messagebox.showerror("Invalid input", f"Invalid cricket hit: {token}")
                 return None
         return tokens
+
+    def _sync_cricket_input_controls(self) -> None:
+        is_cricket = self.game_variant_var.get() == "Cricket"
+        cricket_per_dart = is_cricket and self.input_mode_var.get() == "Per dart"
+        controls_state = "disabled" if cricket_per_dart else "normal"
+        for btn in self.numpad_buttons:
+            if btn.cget("state") != "disabled":
+                btn.configure(state=controls_state)
+        if self.multiplier_switch.cget("state") != "disabled":
+            self.multiplier_switch.configure(state=controls_state)
 
     def _submit_cricket_turn(self) -> None:
         tokens = self._resolve_cricket_tokens()

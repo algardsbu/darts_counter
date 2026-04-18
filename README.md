@@ -22,6 +22,7 @@ This project is mostly vibe-coded. Expect rapid iterations, rough edges, and occ
 - Dedicated in-app Database Manager page with multi-select and select-all delete
 - Modern desktop UI built with CustomTkinter
 - Optional per-dart numpad input (with undo/clear)
+- Cricket can be entered either as comma-separated hits or one dart at a time
 - Live dashboard cards, timeline, and active-player transition animation
 
 ## Requirements
@@ -116,4 +117,3 @@ python darts_counter_ui.py
 - Per-dart numpad multiplier (`x2`/`x3`) applies to numeric keypad dart entry only; manually typed dart values are taken as final values.
 - Checkout suggestions only appear for scores present in `checkout.json`.
 - Match history search is currently player-name based.
-- Cricket entry currently uses manual hit tokens (example: `T20,S19,DB`).
